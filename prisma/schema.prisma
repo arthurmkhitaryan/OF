@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id              String   @id @default(cuid())
+  name            String
+  firm            String
+  type            String   @default("EVAL")
+  status          String   @default("ACTIVE")
+  size            Int?
+  notes           String?
+  color           String   @default("#34d399")
+
+  startingBalance Float?   // начальный баланс счёта ($)
+  currentBalance  Float?   // последний известный баланс
+  profitTarget    Float?   // цель для eval ($)
+  maxDrawdown     Float?   // макс. просадка ($)
+  dailyLossLimit  Float?   // дневной лимит ($)
+
+  trades          Trade[]
+  snapshots       AccountSnapshot[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model AccountSnapshot {
+  id        String   @id @default(cuid())
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  date      DateTime // день снимка
+  balance   Float
+  dayPnl    Float?   // P&L за день (опционально)
+  notes     String?
+  createdAt DateTime @default(now())
+
+  @@unique([accountId, date])
+}
+
+model Trade {
+  id            String   @id @default(cuid())
+  accountId     String
+  account       Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  tradeDate     DateTime
+  instrument    String
+  model         String
+  direction     String
+  entryType     String
+  setupQuality  String
+  session       String   @default("RTH")
+
+  confirmations String
+  mistakes      String   @default("[]")
+
+  entryPrice    Float?
+  exitPrice     Float?
+  stopPrice     Float?
+  targetPrice   Float?
+  contracts     Int      @default(1)
+  pnlDollars    Float
+  pnlR          Float?
+
+  notes         String?
+  screenshots   String   @default("[]")
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model GexSnapshot {
+  id         String   @id @default(cuid())
+  date       DateTime
+  instrument String   // NQ | ES
+  spot       Float?
+  zeroGamma  Float?
+  callWall   Float?
+  putWall    Float?
+  hvl        Float?
+  source     String?
+  notes      String?
+  profile    String?  // JSON: volume & GEX by strike for chart
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([date, instrument])
+}
