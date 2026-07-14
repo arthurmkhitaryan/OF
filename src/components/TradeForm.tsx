@@ -36,14 +36,20 @@ const defaultForm: TradeInput = {
 };
 
 interface TradeFormProps {
-  initial?: TradeInput;
+  initial?: Partial<TradeInput>;
   tradeId?: string;
   accounts?: AccountRecord[];
 }
 
 export function TradeForm({ initial, tradeId, accounts = [] }: TradeFormProps) {
   const router = useRouter();
-  const [form, setForm] = useState<TradeInput>(initial ?? defaultForm);
+  const [form, setForm] = useState<TradeInput>({
+    ...defaultForm,
+    ...initial,
+    confirmations: initial?.confirmations ?? defaultForm.confirmations,
+    mistakes: initial?.mistakes ?? defaultForm.mistakes,
+    screenshots: initial?.screenshots ?? [],
+  });
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");

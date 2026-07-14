@@ -3,6 +3,7 @@ import {
   Activity,
   BarChart3,
   BookOpen,
+  CandlestickChart,
   FileText,
   LayoutDashboard,
   Lightbulb,
@@ -13,6 +14,7 @@ import {
 
 const nav = [
   { href: "/", label: "Дашборд", icon: LayoutDashboard },
+  { href: "/live", label: "Live", icon: CandlestickChart },
   { href: "/gex", label: "GEX", icon: Activity },
   { href: "/accounts", label: "Аккаунты", icon: Wallet },
   { href: "/reports", label: "Отчёты", icon: FileText },
