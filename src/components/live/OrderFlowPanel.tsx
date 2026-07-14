@@ -25,10 +25,16 @@ export function OrderFlowPanel({ of }: { of: OrderFlowSnapshot | null }) {
               "rounded px-2 py-0.5 text-[10px]",
               of.source === "bridge"
                 ? "bg-emerald-950 text-emerald-400"
-                : "bg-amber-950 text-amber-300"
+                : of.source === "demo"
+                  ? "bg-amber-950 text-amber-300"
+                  : "bg-zinc-900 text-zinc-500"
             )}
           >
-            {of.source === "bridge" ? "Rithmic bridge" : "DEMO tape (до Rithmic)"}
+            {of.source === "bridge"
+              ? "Rithmic bridge"
+              : of.source === "demo"
+                ? "DEMO tape"
+                : "OF offline — start bridge"}
           </span>
         </div>
         <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">

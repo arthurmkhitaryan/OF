@@ -8,37 +8,45 @@ export function LiveSetupBanner({
   ofSource,
 }: {
   bridgeConnected: boolean;
-  ofSource?: "bridge" | "demo";
+  ofSource?: "bridge" | "demo" | "none";
 }) {
-  const [bridge, setBridge] = useState<{ reachable?: boolean; status?: string } | null>(
-    null
-  );
+  const [bridge, setBridge] = useState<{
+    reachable?: boolean;
+    status?: string;
+    connected?: boolean;
+    error?: string;
+  } | null>(null);
 
   useEffect(() => {
     void fetch("/api/market/bridge")
       .then((r) => r.json())
       .then(setBridge)
       .catch(() => setBridge({ reachable: false }));
-  }, []);
+  }, [bridgeConnected, ofSource]);
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 text-sm text-zinc-400">
-      <p className="font-medium text-zinc-200">Live Chart · Order Flow · Ticks</p>
+      <p className="font-medium text-zinc-200">Live · Real Order Flow</p>
       <p className="mt-1 text-xs leading-relaxed">
-        Сейчас на графике: VP, GEX, Big trades / Absorption / Delta / Trapped, tick chart.
-        {ofSource === "demo" && (
-          <>
-            {" "}
-            <span className="text-amber-300">
-              Tape = DEMO (восстановлен из 1m bars) — это не настоящий CME T&S.
-            </span>{" "}
-            Правильные print&apos;ы появятся после Rithmic Protocol + Lucid.
-          </>
-        )}
-        {ofSource === "bridge" && (
-          <span className="text-emerald-400"> OF идёт с Rithmic bridge — live tape.</span>
-        )}
+        Delta / Big / Absorption / Trapped считаются только из{" "}
+        <strong className="text-zinc-300">реальных Last Trades</strong> (Rithmic
+        Ticker Plant через bridge). DEMO по умолчанию выключен.
       </p>
+      {ofSource === "bridge" && (
+        <p className="mt-1 text-xs text-emerald-400">
+          OF: bridge — live tape подключён.
+        </p>
+      )}
+      {ofSource === "none" && (
+        <p className="mt-1 text-xs text-amber-300">
+          OF пустой — запусти bridge с Lucid/Rithmic credentials (см. ниже).
+        </p>
+      )}
+      {ofSource === "demo" && (
+        <p className="mt-1 text-xs text-amber-300">
+          OF: DEMO (ALLOW_DEMO_OF=1). Это не CME tape.
+        </p>
+      )}
       <ul className="mt-2 space-y-1 text-xs text-zinc-500">
         <li>
           1. Dev Kit:{" "}
@@ -49,21 +57,25 @@ export function LiveSetupBanner({
             className="text-sky-400 hover:underline"
           >
             rithmic.com/apis
-          </a>{" "}
-          → Protocol
+          </a>
         </li>
-        <li>2. Lucid: custom app + Ticker/History Plant?</li>
+        <li>2. Lucid: custom app + Ticker Plant login?</li>
         <li>
           3. Bridge:{" "}
-          <code className="text-zinc-400">node tools/rithmic-bridge/server.mjs</code>{" "}
-          {bridgeConnected || bridge?.reachable ? (
-            <span className="text-emerald-400">· connected</span>
+          <code className="text-zinc-400">
+            py -3.12 tools/rithmic-bridge/server.py
+          </code>{" "}
+          {bridgeConnected || bridge?.connected ? (
+            <span className="text-emerald-400">· live</span>
+          ) : bridge?.reachable ? (
+            <span className="text-amber-400">· up, waiting tape</span>
           ) : (
             <span className="text-zinc-600">· offline</span>
           )}
         </li>
         <li>
-          Docs: <code className="text-zinc-400">docs/rithmic-setup.md</code> ·{" "}
+          Docs:{" "}
+          <code className="text-zinc-400">tools/rithmic-bridge/README.md</code> ·{" "}
           <Link href="/gex" className="text-sky-400 hover:underline">
             GEX
           </Link>

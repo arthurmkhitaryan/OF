@@ -16,7 +16,7 @@ const BIG_TRADE: Record<LiveInstrument, number> = { NQ: 75, ES: 200 };
 export function analyzeOrderFlow(
   instrument: LiveInstrument,
   prints: TickPrint[],
-  source: "bridge" | "demo"
+  source: "bridge" | "demo" | "none"
 ): OrderFlowSnapshot {
   const sorted = [...prints].sort((a, b) => a.time - b.time);
   const big = detectBigTrades(instrument, sorted)
@@ -191,7 +191,7 @@ export async function fetchBridgeTape(
   try {
     const res = await fetch(`${base}/orderflow?symbol=${instrument}`, {
       cache: "no-store",
-      signal: AbortSignal.timeout(1500),
+      signal: AbortSignal.timeout(2000),
     });
     if (!res.ok) return null;
     const data = (await res.json()) as {
@@ -199,6 +199,7 @@ export async function fetchBridgeTape(
       prints?: TickPrint[];
       delta?: DeltaBar[];
       cumDelta?: number;
+      source?: string;
     };
     if (!data.prints?.length && !data.events?.length) return null;
     if (data.prints?.length) {
@@ -216,9 +217,35 @@ export async function fetchBridgeTape(
   }
 }
 
+export function emptyOrderFlow(): OrderFlowSnapshot {
+  return {
+    source: "none",
+    prints: [],
+    events: [],
+    delta: [],
+    cumDelta: 0,
+  };
+}
+
 /**
- * Build demo tape from 1m bars so Big/Abs/Trapped/Delta can light up the chart
- * until Rithmic Ticker Plant is connected. Labeled source: "demo".
+ * Resolve OF: bridge first. Demo only if ALLOW_DEMO_OF=1.
+ */
+export async function resolveOrderFlow(
+  instrument: LiveInstrument,
+  bars: MarketBar[]
+): Promise<OrderFlowSnapshot> {
+  const bridge = await fetchBridgeTape(instrument);
+  if (bridge && (bridge.prints.length > 0 || bridge.events.length > 0)) {
+    return bridge;
+  }
+  if (process.env.ALLOW_DEMO_OF === "1") {
+    return synthesizeTapeFromBars(instrument, bars);
+  }
+  return emptyOrderFlow();
+}
+
+/**
+ * Build demo tape from 1m bars — OFF by default (ALLOW_DEMO_OF=1 to enable).
  */
 export function synthesizeTapeFromBars(
   instrument: LiveInstrument,

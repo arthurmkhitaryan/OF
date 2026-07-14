@@ -17,11 +17,10 @@ export function buildLiveSignal(
   const ofReasons: string[] = [];
   const missing: string[] = [];
 
-  if (!of || of.events.length === 0) {
+  if (!of || of.source === "none" || of.events.length === 0) {
     missing.push(
-      "Big trades (нужен tape)",
-      "Absorption / delta",
-      "Trapped traders"
+      "Big trades / Absorption / Delta — нужен Rithmic bridge (async_rithmic)",
+      "Запусти tools/rithmic-bridge с Lucid credentials"
     );
   } else {
     const big = of.events.filter((e) => e.type === "BIG_TRADE").length;
@@ -34,7 +33,7 @@ export function buildLiveSignal(
       `Δ cum ${of.cumDelta > 0 ? "+" : ""}${Math.round(of.cumDelta)} (${of.source})`
     );
     if (of.source === "demo") {
-      missing.push("OF demo — для live CME tape нужен Rithmic bridge");
+      missing.push("OF demo — включи bridge для реального tape");
     }
   }
 

@@ -1,33 +1,39 @@
-# Rithmic Bridge (Phase 2 stub)
+# Real Order Flow bridge (async_rithmic)
 
-Local service that will connect to **R | Protocol API** and feed the Next.js journal.
+Replaces DEMO tape with **live CME Last Trade** prints from Rithmic Ticker Plant
+(Lucid / Test credentials).
 
-## Status
+## What you need first
 
-Stub only — waits for Rithmic Dev Kit + Lucid permission.
+1. **Rithmic Protocol Dev Kit** → https://www.rithmic.com/apis  
+   You get WSS URLs for `servers.toml` → put Test URL in `RITHMIC_URL`.
+2. Email **Lucid**: can this custom app login with your Lucid user (Ticker Plant)?
+3. Python **3.11 or 3.12** (3.14 breaks protobuf today).
 
-## Planned endpoints
+Library: [async_rithmic](https://github.com/rundef/async_rithmic)
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/health` | Bridge up |
-| GET | `/bars?symbol=NQ\|ES` | History Plant bars |
-| GET | `/stream` | SSE/WebSocket tick + T&S |
-| GET | `/orderflow?symbol=NQ\|ES` | Aggregated big trades / delta levels |
-
-## Run (later)
+## Install & run
 
 ```bash
-# after Protocol SDK is available
 cd tools/rithmic-bridge
-npm install
-npm run start
+py -3.12 -m venv .venv
+# Windows:
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+# fill RITHMIC_USER / PASSWORD / URL / SYSTEM
+python server.py
 ```
 
-Journal expects `RITHMIC_BRIDGE_URL=http://127.0.0.1:7788` in `.env`.
+Health: http://127.0.0.1:7788/health  
+Orderflow: http://127.0.0.1:7788/orderflow?symbol=NQ
 
-## Order flow rules (OrderFlowEngine)
+## Journal `.env`
 
-- Big trade: NQ ≥ 75 lots / ES ≥ 200 lots
-- Absorption: heavy volume/delta, price does not continue
-- Trapped: look above/below & fail + reclaim
+```
+RITHMIC_BRIDGE_URL=http://127.0.0.1:7788
+ALLOW_DEMO_OF=0
+```
+
+With bridge connected, `/live` shows `OF: bridge` and real Big / Abs / Δ / Trapped
+from classified Last Trades. Demo synthesis is **off** by default.

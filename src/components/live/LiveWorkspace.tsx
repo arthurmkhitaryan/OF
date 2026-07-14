@@ -207,7 +207,11 @@ export function LiveWorkspace() {
                   OF:{" "}
                   <span
                     className={
-                      of.source === "bridge" ? "text-emerald-400" : "text-amber-300"
+                      of.source === "bridge"
+                        ? "text-emerald-400"
+                        : of.source === "demo"
+                          ? "text-amber-300"
+                          : "text-zinc-500"
                     }
                   >
                     {of.source}

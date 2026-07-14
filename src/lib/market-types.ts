@@ -80,7 +80,7 @@ export interface DeltaBar {
 }
 
 export interface OrderFlowSnapshot {
-  source: "bridge" | "demo";
+  source: "bridge" | "demo" | "none";
   prints: TickPrint[];
   events: OrderFlowEvent[];
   delta: DeltaBar[];

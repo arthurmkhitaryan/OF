@@ -3,7 +3,7 @@ import { fetchYahooBars } from "@/lib/market-bars";
 import { computeVolumeProfile } from "@/lib/volume-profile";
 import { buildLiveSignal } from "@/lib/signal-engine";
 import { getGexForDate } from "@/lib/gex-queries";
-import { fetchBridgeTape, synthesizeTapeFromBars } from "@/lib/orderflow-engine";
+import { resolveOrderFlow } from "@/lib/orderflow-engine";
 import type { GexLevelsLite, LiveInstrument } from "@/lib/market-types";
 
 export async function GET(request: Request) {
@@ -33,12 +33,7 @@ export async function GET(request: Request) {
       }
     : null;
 
-  const bridge = await fetchBridgeTape(instrument);
-  const of =
-    bridge && (bridge.prints.length > 0 || bridge.events.length > 0)
-      ? bridge
-      : synthesizeTapeFromBars(instrument, bars);
-
+  const of = await resolveOrderFlow(instrument, bars);
   const signal = buildLiveSignal(bars, profile, gex, of);
 
   return NextResponse.json({

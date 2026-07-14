@@ -5,9 +5,7 @@ import { buildLiveSignal } from "@/lib/signal-engine";
 import { getGexForDate } from "@/lib/gex-queries";
 import {
   analyzeOrderFlow,
-  fetchBridgeTape,
-  nextDemoPrint,
-  synthesizeTapeFromBars,
+  resolveOrderFlow,
 } from "@/lib/orderflow-engine";
 import type {
   GexLevelsLite,
@@ -20,24 +18,13 @@ import type {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/** Fastest practical SSE cadence for demo/live UI */
-const TICK_MS = 200;
+const TICK_MS = 250;
 const FULL_REFRESH_MS = 60_000;
-const HEAVY_EVERY = 5; // profile/signal/OF less often than price ticks
+const HEAVY_EVERY = 4;
+const BRIDGE_POLL_EVERY = 2;
 
 function encode(data: unknown) {
   return new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`);
-}
-
-async function buildOf(
-  instrument: LiveInstrument,
-  bars: MarketBar[]
-): Promise<OrderFlowSnapshot> {
-  const bridge = await fetchBridgeTape(instrument);
-  if (bridge && (bridge.prints.length > 0 || bridge.events.length > 0)) {
-    return bridge;
-  }
-  return synthesizeTapeFromBars(instrument, bars);
 }
 
 async function snapshot(instrument: LiveInstrument) {
@@ -58,7 +45,7 @@ async function snapshot(instrument: LiveInstrument) {
         hvl: gexSnap.hvl,
       }
     : null;
-  const of = await buildOf(instrument, bars);
+  const of = await resolveOrderFlow(instrument, bars);
   const signal = buildLiveSignal(bars, profile, gex, of);
 
   return {
@@ -78,15 +65,13 @@ async function snapshot(instrument: LiveInstrument) {
   };
 }
 
+/** Only used when ALLOW_DEMO_OF=1 */
 function tickBars(bars: MarketBar[], print: TickPrint): MarketBar[] {
   if (!bars.length) return bars;
   const next = bars.map((b) => ({ ...b }));
   const last = next[next.length - 1];
   const now = Math.floor(print.time);
   const close = print.price;
-  const high = Math.max(last.high, close);
-  const low = Math.min(last.low, close);
-
   if (now - last.time >= 55) {
     next.push({
       time: now,
@@ -100,8 +85,8 @@ function tickBars(bars: MarketBar[], print: TickPrint): MarketBar[] {
   } else {
     next[next.length - 1] = {
       ...last,
-      high,
-      low,
+      high: Math.max(last.high, close),
+      low: Math.min(last.low, close),
       close,
       volume: last.volume + print.size,
     };
@@ -144,16 +129,44 @@ export async function GET(request: NextRequest) {
           }
 
           tickN += 1;
-          const lastPrice = snap.bars[snap.bars.length - 1]?.close ?? 0;
           let of = snap.of as OrderFlowSnapshot;
 
-          if (of.source === "demo") {
+          if (of.source === "bridge" || of.source === "none") {
+            if (tickN % BRIDGE_POLL_EVERY === 0) {
+              of = await resolveOrderFlow(instrument, snap.bars);
+              const heavy = tickN % (BRIDGE_POLL_EVERY * HEAVY_EVERY) === 0;
+              if (heavy) {
+                const binSize = instrument === "NQ" ? 5 : 2.5;
+                const profile = computeVolumeProfile(snap.bars, binSize);
+                const signal = buildLiveSignal(snap.bars, profile, snap.gex, of);
+                snap = {
+                  ...snap,
+                  type: "tick",
+                  profile,
+                  signal,
+                  orderflow: of.events,
+                  of,
+                  bridge: { connected: of.source === "bridge" },
+                  updatedAt: new Date().toISOString(),
+                };
+              } else {
+                snap = {
+                  ...snap,
+                  type: "tick",
+                  orderflow: of.events,
+                  of,
+                  bridge: { connected: of.source === "bridge" },
+                  updatedAt: new Date().toISOString(),
+                };
+              }
+            }
+          } else if (of.source === "demo" && process.env.ALLOW_DEMO_OF === "1") {
+            const { nextDemoPrint } = await import("@/lib/orderflow-engine");
+            const lastPrice = snap.bars[snap.bars.length - 1]?.close ?? 0;
             const print = nextDemoPrint(instrument, lastPrice);
             const prints = [...of.prints, print].slice(-200);
             const bars = tickBars(snap.bars, print);
-            const heavy = tickN % HEAVY_EVERY === 0;
-
-            if (heavy) {
+            if (tickN % HEAVY_EVERY === 0) {
               of = analyzeOrderFlow(instrument, prints, "demo");
               const binSize = instrument === "NQ" ? 5 : 2.5;
               const profile = computeVolumeProfile(bars, binSize);
@@ -169,7 +182,6 @@ export async function GET(request: NextRequest) {
                 updatedAt: new Date().toISOString(),
               };
             } else {
-              // Fast path: price + append print only (skip full OF recompute)
               of = {
                 ...of,
                 prints,
@@ -185,15 +197,6 @@ export async function GET(request: NextRequest) {
                 updatedAt: new Date().toISOString(),
               };
             }
-          } else if (tickN % 10 === 0) {
-            of = await buildOf(instrument, snap.bars);
-            snap = {
-              ...snap,
-              type: "tick",
-              orderflow: of.events,
-              of,
-              updatedAt: new Date().toISOString(),
-            };
           }
 
           controller.enqueue(encode(snap));
