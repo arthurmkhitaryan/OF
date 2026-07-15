@@ -2,23 +2,33 @@
 
 import type { VolumeProfileResult } from "@/lib/market-types";
 
-export function VolumeProfilePane({ profile }: { profile: VolumeProfileResult | null }) {
+export function VolumeProfilePane({
+  profile,
+  rangeLabel,
+}: {
+  profile: VolumeProfileResult | null;
+  rangeLabel?: string;
+}) {
   if (!profile || profile.bins.length === 0) {
     return (
       <div className="flex h-full min-h-[200px] items-center justify-center rounded-xl border border-dashed border-zinc-800 text-xs text-zinc-600">
-        Нет Volume Profile
+        Нет Volume Profile — выбери другой VP range или дождись баров
       </div>
     );
   }
 
   const maxVol = Math.max(...profile.bins.map((b) => b.volume), 1);
-  // Show denser mid section — sample if too many bins
   const step = profile.bins.length > 80 ? Math.ceil(profile.bins.length / 70) : 1;
   const bins = profile.bins.filter((_, i) => i % step === 0).reverse();
 
   return (
     <div className="flex h-full flex-col rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
-      <p className="mb-2 text-xs font-medium text-zinc-400">Volume Profile</p>
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <p className="text-xs font-medium text-zinc-400">Volume Profile</p>
+        {rangeLabel && (
+          <p className="truncate text-[10px] text-zinc-600">{rangeLabel}</p>
+        )}
+      </div>
       <div className="mb-2 grid grid-cols-3 gap-1 text-[10px]">
         <Stat label="VAH" value={profile.vah} color="text-sky-400" />
         <Stat label="POC" value={profile.poc} color="text-violet-400" />
@@ -66,7 +76,8 @@ export function VolumeProfilePane({ profile }: { profile: VolumeProfileResult | 
         })}
       </div>
       <p className="mt-2 text-[10px] text-zinc-600">
-        Regime: {profile.regime} · bias {profile.trendBias}
+        Regime: {profile.regime} · bias {profile.trendBias} · vol{" "}
+        {Math.round(profile.totalVolume).toLocaleString()}
       </p>
     </div>
   );

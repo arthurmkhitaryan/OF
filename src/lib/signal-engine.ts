@@ -17,11 +17,21 @@ export function buildLiveSignal(
   const ofReasons: string[] = [];
   const missing: string[] = [];
 
-  if (!of || of.source === "none" || of.events.length === 0) {
+  if (!of || of.source === "none") {
     missing.push(
-      "Big trades / Absorption / Delta — нужен Rithmic bridge (async_rithmic)",
-      "Запусти tools/rithmic-bridge с Lucid credentials"
+      "Big / Absorption / Delta — нет ленты Rithmic",
+      "Перезапусти npm run bridge (должен загрузить tick history)"
     );
+  } else if (of.prints.length === 0) {
+    missing.push(
+      "Tape пустой — ждут Last Trades / tick history с Rithmic",
+      "Проверь agreements в R|Trader Test и print_counts в /health"
+    );
+  } else if (of.events.length === 0) {
+    ofReasons.push(
+      `Δ cum ${of.cumDelta > 0 ? "+" : ""}${Math.round(of.cumDelta)} (${of.source})`
+    );
+    missing.push("Events ещё копятся (нужен объём на ленте)");
   } else {
     const big = of.events.filter((e) => e.type === "BIG_TRADE").length;
     const abs = of.events.filter((e) => e.type === "ABSORPTION").length;

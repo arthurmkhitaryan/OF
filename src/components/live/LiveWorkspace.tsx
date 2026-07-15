@@ -17,6 +17,19 @@ import type {
   VolumeProfileResult,
 } from "@/lib/market-types";
 import { buildPlansForAccounts } from "@/lib/position-sizing";
+import { useRithmicWs } from "@/hooks/useRithmicWs";
+import { analyzeOrderFlow } from "@/lib/orderflow-engine";
+import { applyPrintsToBars } from "@/lib/bar-utils";
+import { computeVolumeProfile } from "@/lib/volume-profile";
+import {
+  VP_RANGE_PRESETS,
+  sliceBarsForVp,
+  vpBinSize,
+  vpRangeLabel,
+  type VpCustomRange,
+  type VpRangeMode,
+  type VpVisibleRange,
+} from "@/lib/vp-range";
 import { cn } from "@/lib/cn";
 import { Radio, RefreshCw } from "lucide-react";
 
@@ -26,14 +39,14 @@ const DEFAULT_LAYERS: ChartLayers = {
   lvn: true,
   gex: false,
   ofMarkers: true,
-  ofBigOnly: true,
+  ofBigOnly: false,
   levels: true,
 };
 
 interface LivePayload {
   type?: string;
   instrument: LiveInstrument;
-  source: "yahoo" | "demo" | "bridge";
+  source: "bridge" | "none" | "demo" | "yahoo";
   feedSymbol: string;
   error: string | null;
   updatedAt: string;
@@ -55,15 +68,24 @@ interface AccLite {
 
 export function LiveWorkspace() {
   const [instrument, setInstrument] = useState<LiveInstrument>("NQ");
-  const [chartMode, setChartMode] = useState<"candles" | "ticks">("candles");
+  const [chartMode, setChartMode] = useState<"candles" | "ticks">("ticks");
   const [layers, setLayers] = useState<ChartLayers>(DEFAULT_LAYERS);
   const [followLive, setFollowLive] = useState(true);
+  const [userPaused, setUserPaused] = useState(false);
   const [data, setData] = useState<LivePayload | null>(null);
   const [accounts, setAccounts] = useState<AccLite[]>([]);
   const [loading, setLoading] = useState(true);
   const [live, setLive] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [streamKey, setStreamKey] = useState(0);
+  const [vpMode, setVpMode] = useState<VpRangeMode>("6h");
+  const [vpCustom, setVpCustom] = useState<VpCustomRange>(null);
+  const [vpVisible, setVpVisible] = useState<VpVisibleRange>(null);
+  const [customPickStep, setCustomPickStep] = useState<"idle" | "from" | "to">(
+    "idle"
+  );
+  const [customDraftFrom, setCustomDraftFrom] = useState<number | null>(null);
+  const tape = useRithmicWs(instrument);
 
   useEffect(() => {
     void fetch("/api/accounts")
@@ -76,6 +98,7 @@ export function LiveWorkspace() {
     setLoading(true);
     setErr(null);
     setFollowLive(true);
+    setUserPaused(false);
     const es = new EventSource(`/api/market/stream?symbol=${instrument}`);
 
     es.onopen = () => {
@@ -85,15 +108,23 @@ export function LiveWorkspace() {
 
     es.onmessage = (ev) => {
       try {
-        const json = JSON.parse(ev.data) as LivePayload & { type?: string; message?: string };
+        const json = JSON.parse(ev.data) as LivePayload & {
+          type?: string;
+          message?: string;
+        };
         if (json.type === "error") {
           setErr(json.message ?? "stream error");
           return;
         }
-        if (json.bars && json.signal) {
+        if (json.type === "heartbeat") {
+          setLive(true);
+          return;
+        }
+        if (json.type === "snapshot" || (json.bars && json.signal && !json.type)) {
           setData(json);
           setLoading(false);
           setErr(null);
+          setLive(true);
         }
       } catch {
         /* ignore parse */
@@ -131,7 +162,90 @@ export function LiveWorkspace() {
   }, [data, accounts]);
 
   const primary = plans[0];
-  const of = data?.of ?? null;
+  const of = useMemo(() => {
+    if (tape.prints.length > 0) {
+      return analyzeOrderFlow(instrument, tape.prints, "bridge");
+    }
+    return data?.of ?? null;
+  }, [tape.prints, instrument, data?.of]);
+
+  const displayBars = useMemo(() => {
+    if (!data?.bars?.length) return data?.bars ?? [];
+    const base = data.bars;
+    const lastT = base[base.length - 1]!.time;
+    const livePrints = tape.prints.filter((p) => p.time >= lastT - 60);
+    let bars = applyPrintsToBars(base, livePrints);
+    if (tape.lastMid != null && bars.length) {
+      const last = { ...bars[bars.length - 1]! };
+      last.high = Math.max(last.high, tape.lastMid);
+      last.low = Math.min(last.low, tape.lastMid);
+      last.close = tape.lastMid;
+      bars = [...bars.slice(0, -1), last];
+    }
+    return bars;
+  }, [data?.bars, tape.prints, tape.lastMid]);
+
+  const profile = useMemo(() => {
+    const slice = sliceBarsForVp(displayBars, vpMode, {
+      custom: vpCustom,
+      visible: vpVisible,
+    });
+    if (!slice.length) return data?.profile ?? null;
+    return computeVolumeProfile(slice, vpBinSize(instrument));
+  }, [displayBars, vpMode, vpCustom, vpVisible, instrument, data?.profile]);
+
+  const vpLabel = useMemo(() => {
+    const slice = sliceBarsForVp(displayBars, vpMode, {
+      custom: vpCustom,
+      visible: vpVisible,
+    });
+    return vpRangeLabel(vpMode, {
+      custom: vpCustom,
+      visible: vpVisible,
+      barCount: slice.length,
+    });
+  }, [displayBars, vpMode, vpCustom, vpVisible]);
+
+  const selectVpMode = useCallback((mode: VpRangeMode) => {
+    setVpMode(mode);
+    if (mode === "custom") {
+      setCustomPickStep("from");
+      setCustomDraftFrom(null);
+      setVpCustom(null);
+      setUserPaused(true);
+      setFollowLive(false);
+      setChartMode("candles");
+    } else {
+      setCustomPickStep("idle");
+      setCustomDraftFrom(null);
+    }
+  }, []);
+
+  const onCustomTimePicked = useCallback(
+    (time: number) => {
+      if (customPickStep === "from") {
+        setCustomDraftFrom(time);
+        setCustomPickStep("to");
+        return;
+      }
+      if (customPickStep === "to" && customDraftFrom != null) {
+        const from = Math.min(customDraftFrom, time);
+        const to = Math.max(customDraftFrom, time);
+        setVpCustom({ from, to });
+        setCustomPickStep("idle");
+        setCustomDraftFrom(null);
+      }
+    },
+    [customPickStep, customDraftFrom]
+  );
+
+  useEffect(() => {
+    if (userPaused) return;
+    if (tape.lastMs != null || tape.prints.length > 0) {
+      setFollowLive(true);
+    }
+  }, [tape.lastMs, tape.prints.length, userPaused]);
+
   const entry = primary?.entry ?? data?.signal.entryZone ?? null;
   const stop = primary?.stop ?? data?.signal.stop ?? null;
   const take = primary?.take ?? data?.signal.targets[0] ?? null;
@@ -141,6 +255,8 @@ export function LiveWorkspace() {
       <LiveSetupBanner
         bridgeConnected={data?.bridge.connected ?? false}
         ofSource={of?.source}
+        priceSource={data?.source}
+        feedError={data?.error}
       />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -196,11 +312,22 @@ export function LiveWorkspace() {
             )}
           >
             <Radio size={12} className={live ? "animate-pulse" : undefined} />
-            {live ? "SSE live" : "offline"}
+            {live ? "SSE" : "SSE off"}
+            {tape.status === "open" ? (
+              <span className="text-emerald-400"> · WS ms</span>
+            ) : (
+              <span className="text-zinc-600"> · WS {tape.status}</span>
+            )}
           </span>
           {data && (
             <span>
               price: <span className="text-zinc-300">{data.source}</span>
+              {data.feedSymbol && (
+                <>
+                  {" · "}
+                  <span className="font-mono text-sky-400">{data.feedSymbol}</span>
+                </>
+              )}
               {of && (
                 <>
                   {" · "}
@@ -215,10 +342,17 @@ export function LiveWorkspace() {
                     }
                   >
                     {of.source}
+                    {tape.prints.length ? ` · ${tape.prints.length} ticks` : ""}
                   </span>
                 </>
               )}
-              {data.updatedAt && ` · ${new Date(data.updatedAt).toLocaleTimeString()}`}
+              {tape.lastMs != null &&
+                ` · ${new Date(tape.lastMs).toLocaleTimeString()}.${String(
+                  tape.lastMs % 1000
+                ).padStart(3, "0")}`}
+              {!tape.lastMs &&
+                data.updatedAt &&
+                ` · ${new Date(data.updatedAt).toLocaleTimeString()}`}
             </span>
           )}
           <button
@@ -231,6 +365,18 @@ export function LiveWorkspace() {
           </button>
         </div>
       </div>
+
+      {data?.feedSymbol?.startsWith("NQ") && data.source === "bridge" && (
+        <p className="rounded-lg border border-amber-900/40 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-200/90">
+          Сравнивай на TradingView{" "}
+          <strong className="text-amber-100">CME_MINI:NQU2026</strong> (front
+          month), не continuous <code className="text-zinc-400">NQ1!</code>.
+          Фид:{" "}
+          <strong className="font-mono text-sky-300">{data.feedSymbol}</strong>{" "}
+          · Lucid / Rithmic. На графике — <strong>Live follow</strong>, если
+          Paused.
+        </p>
+      )}
 
       {err && (
         <p className="rounded-lg border border-amber-900/40 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
@@ -248,56 +394,112 @@ export function LiveWorkspace() {
                 <LayerToggles layers={layers} onChange={setLayers} />
                 <button
                   type="button"
-                  onClick={() => setFollowLive(true)}
+                  onClick={() => {
+                    setUserPaused(false);
+                    setFollowLive(true);
+                  }}
                   className={cn(
                     "rounded-md border px-2.5 py-1 text-[11px]",
-                    followLive
+                    followLive && !userPaused
                       ? "border-emerald-700/80 bg-emerald-950/40 text-emerald-300"
                       : "border-zinc-700 text-zinc-400 hover:text-white"
                   )}
                 >
-                  {followLive ? "● Live follow" : "⏸ Paused — click to follow"}
+                  {followLive && !userPaused
+                    ? "● Live follow"
+                    : "⏸ Paused — click to follow"}
                 </button>
               </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] text-zinc-500">VP range</span>
+                <div className="flex flex-wrap gap-1 rounded-lg border border-zinc-800 bg-zinc-900/40 p-1">
+                  {VP_RANGE_PRESETS.map(({ mode, label }) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => selectVpMode(mode)}
+                      className={cn(
+                        "rounded-md px-2.5 py-1 text-[11px]",
+                        vpMode === mode
+                          ? "bg-violet-700 text-white"
+                          : "text-zinc-400 hover:text-white"
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-[10px] text-zinc-600">{vpLabel}</span>
+              </div>
+
+              {customPickStep !== "idle" && (
+                <p className="rounded-lg border border-sky-800/50 bg-sky-950/30 px-3 py-2 text-[11px] text-sky-200">
+                  {customPickStep === "from"
+                    ? "Custom VP: кликни на графике начало диапазона"
+                    : "Custom VP: кликни конец диапазона"}
+                  {customDraftFrom != null && (
+                    <span className="ml-2 text-zinc-400">
+                      from{" "}
+                      {new Date(customDraftFrom * 1000).toLocaleTimeString()}
+                    </span>
+                  )}
+                </p>
+              )}
+
               {chartMode === "candles" ? (
                 <LiveChart
                   key={`${instrument}-candles`}
-                  bars={data.bars}
-                  profile={data.profile}
+                  bars={displayBars}
+                  profile={profile}
                   prints={of?.prints ?? []}
                   gex={data.gex}
-                  orderflow={data.orderflow}
+                  orderflow={of?.events ?? data.orderflow}
                   entryZone={entry}
                   stopPrice={stop}
                   takePrice={take}
                   layers={layers}
-                  followLive={followLive}
-                  onFollowLiveChange={setFollowLive}
+                  followLive={followLive && !userPaused}
+                  livePrice={tape.lastMid}
+                  onFollowLiveChange={(v) => {
+                    if (!v) setUserPaused(true);
+                    setFollowLive(v);
+                  }}
+                  onVisibleTimeRangeChange={setVpVisible}
+                  customPickActive={customPickStep !== "idle"}
+                  onCustomTimePicked={onCustomTimePicked}
+                  highlightRange={
+                    vpMode === "custom"
+                      ? vpCustom ??
+                        (customDraftFrom != null
+                          ? { from: customDraftFrom, to: customDraftFrom }
+                          : null)
+                      : null
+                  }
                 />
               ) : (
                 <TickChart
                   key={`${instrument}-ticks`}
                   prints={of?.prints ?? []}
-                  events={of?.events ?? data.orderflow}
+                  events={of?.events ?? []}
                   entryZone={entry}
                   stopPrice={stop}
                   takePrice={take}
                   bigOnly={layers.ofBigOnly}
-                  followLive={followLive}
-                  onFollowLiveChange={setFollowLive}
+                  followLive={followLive && !userPaused}
+                  livePrice={tape.lastMid}
+                  onFollowLiveChange={(v) => {
+                    if (!v) setUserPaused(true);
+                    setFollowLive(v);
+                  }}
                 />
               )}
+              <VolumeProfilePane profile={profile} rangeLabel={vpLabel} />
               <p className="text-[10px] text-zinc-600">
-                Слева VP · справа Δ. Двигай график — автоскролл выключится. Тики ~200мс.
+                OF: Big ≥ {instrument === "NQ" ? 40 : 100} lots · Absorption =
+                объём у уровня без продолжения цены · Δ из aggressor tape · VP
+                пересчитывается по выбранному range.
               </p>
-              <details className="rounded-xl border border-zinc-800 bg-zinc-900/40">
-                <summary className="cursor-pointer px-3 py-2 text-xs text-zinc-500 hover:text-zinc-300">
-                  Volume Profile — список уровней
-                </summary>
-                <div className="border-t border-zinc-800 p-2">
-                  <VolumeProfilePane profile={data.profile} />
-                </div>
-              </details>
             </div>
             <OrderFlowPanel of={of} />
           </div>

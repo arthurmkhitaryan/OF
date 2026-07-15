@@ -1,39 +1,47 @@
-# Real Order Flow bridge (async_rithmic)
+# Real market data bridge (Rithmic only)
 
-Replaces DEMO tape with **live CME Last Trade** prints from Rithmic Ticker Plant
-(Lucid / Test credentials).
+1m candles + Last Trades from Rithmic History / Ticker Plant.
+No Yahoo, no DEMO tape.
 
-## What you need first
-
-1. **Rithmic Protocol Dev Kit** → https://www.rithmic.com/apis  
-   You get WSS URLs for `servers.toml` → put Test URL in `RITHMIC_URL`.
-2. Email **Lucid**: can this custom app login with your Lucid user (Ticker Plant)?
-3. Python **3.11 or 3.12** (3.14 breaks protobuf today).
-
-Library: [async_rithmic](https://github.com/rundef/async_rithmic)
-
-## Install & run
+## Run
 
 ```bash
-cd tools/rithmic-bridge
-py -3.12 -m venv .venv
-# Windows:
-.venv\Scripts\activate
-pip install -r requirements.txt
-copy .env.example .env
-# fill RITHMIC_USER / PASSWORD / URL / SYSTEM
-python server.py
+# from repo root (Windows-ok)
+npm run bridge
 ```
 
-Health: http://127.0.0.1:7788/health  
-Orderflow: http://127.0.0.1:7788/orderflow?symbol=NQ
+Needs `tools/rithmic-bridge/.env`:
 
-## Journal `.env`
+```
+RITHMIC_USER=...
+RITHMIC_PASSWORD=...
+RITHMIC_SYSTEM=Rithmic Test
+RITHMIC_URL=wss://rituz00100.rithmic.com:443
+RITHMIC_SSL_VERIFY=0
+RITHMIC_BRIDGE_PORT=7788
+```
+
+Root `.env`:
 
 ```
 RITHMIC_BRIDGE_URL=http://127.0.0.1:7788
 ALLOW_DEMO_OF=0
 ```
 
-With bridge connected, `/live` shows `OF: bridge` and real Big / Abs / Δ / Trapped
-from classified Last Trades. Demo synthesis is **off** by default.
+## Endpoints
+
+| Path | Returns |
+|------|---------|
+| `/health` | connection, contracts, bar/print counts |
+| `/bars?symbol=NQ` | 1m OHLC from History + live ticks |
+| `/orderflow?symbol=NQ` | Last Trade prints for OF engine |
+| **`/ws?symbol=NQ`** | **WebSocket tape with `time_ms` (source_ssboe+usecs)** |
+
+WS messages: `hello` · `snapshot` · `trade` · `bbo` · `bar`
+
+## Before first login
+
+1. R \| Trader → **Rithmic Test** → sign agreements  
+2. Then `npm run bridge`
+
+Kit reference (local): `api/0.89.0.0/`

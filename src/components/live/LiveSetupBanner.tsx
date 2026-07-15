@@ -6,15 +6,23 @@ import { useEffect, useState } from "react";
 export function LiveSetupBanner({
   bridgeConnected,
   ofSource,
+  priceSource,
+  feedError,
 }: {
   bridgeConnected: boolean;
   ofSource?: "bridge" | "demo" | "none";
+  priceSource?: string;
+  feedError?: string | null;
 }) {
   const [bridge, setBridge] = useState<{
     reachable?: boolean;
     status?: string;
     connected?: boolean;
     error?: string;
+    feed?: string;
+    version?: string;
+    bar_counts?: Record<string, number>;
+    print_counts?: Record<string, number>;
   } | null>(null);
 
   useEffect(() => {
@@ -22,53 +30,64 @@ export function LiveSetupBanner({
       .then((r) => r.json())
       .then(setBridge)
       .catch(() => setBridge({ reachable: false }));
-  }, [bridgeConnected, ofSource]);
+  }, [bridgeConnected, ofSource, priceSource]);
+
+  const live = bridgeConnected || bridge?.connected;
+  const staleBridge =
+    bridge?.reachable &&
+    bridge?.connected &&
+    bridge?.feed !== "rithmic_only" &&
+    !bridge?.version?.startsWith("rithmic-only");
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 text-sm text-zinc-400">
-      <p className="font-medium text-zinc-200">Live · Real Order Flow</p>
+      <p className="font-medium text-zinc-200">Live · Rithmic only</p>
       <p className="mt-1 text-xs leading-relaxed">
-        Delta / Big / Absorption / Trapped считаются только из{" "}
-        <strong className="text-zinc-300">реальных Last Trades</strong> (Rithmic
-        Ticker Plant через bridge). DEMO по умолчанию выключен.
+        Цена и Order Flow только из Rithmic bridge. Yahoo отключён.
       </p>
-      {ofSource === "bridge" && (
+
+      {staleBridge && (
+        <p className="mt-2 text-xs text-rose-300">
+          Крутится <strong>старый</strong> bridge без `/bars`. В терминале
+          bridge: Ctrl+C, затем снова{" "}
+          <code className="text-zinc-200">npm run bridge</code>. В логе должно
+          быть{" "}
+          <code className="text-zinc-200">Rithmic-only: bars + Last Trades</code>
+          .
+        </p>
+      )}
+
+      {live && !staleBridge && priceSource === "bridge" && (
         <p className="mt-1 text-xs text-emerald-400">
-          OF: bridge — live tape подключён.
+          Feed: Rithmic · bars{" "}
+          {bridge?.bar_counts
+            ? JSON.stringify(bridge.bar_counts)
+            : "…"}{" "}
+          · prints{" "}
+          {bridge?.print_counts
+            ? JSON.stringify(bridge.print_counts)
+            : "…"}
         </p>
       )}
-      {ofSource === "none" && (
+
+      {!live && (
         <p className="mt-1 text-xs text-amber-300">
-          OF пустой — запусти bridge с Lucid/Rithmic credentials (см. ниже).
+          Bridge offline — <code className="text-zinc-300">npm run bridge</code>
         </p>
       )}
-      {ofSource === "demo" && (
-        <p className="mt-1 text-xs text-amber-300">
-          OF: DEMO (ALLOW_DEMO_OF=1). Это не CME tape.
-        </p>
+
+      {feedError && !staleBridge && (
+        <p className="mt-1 text-xs text-rose-300">{feedError}</p>
       )}
+
       <ul className="mt-2 space-y-1 text-xs text-zinc-500">
+        <li>1. R | Trader → Rithmic Test → agreements</li>
         <li>
-          1. Dev Kit:{" "}
-          <a
-            href="https://www.rithmic.com/apis"
-            target="_blank"
-            rel="noreferrer"
-            className="text-sky-400 hover:underline"
-          >
-            rithmic.com/apis
-          </a>
-        </li>
-        <li>2. Lucid: custom app + Ticker Plant login?</li>
-        <li>
-          3. Bridge:{" "}
-          <code className="text-zinc-400">
-            py -3.12 tools/rithmic-bridge/server.py
-          </code>{" "}
-          {bridgeConnected || bridge?.connected ? (
+          2. <code className="text-zinc-400">npm run bridge</code>{" "}
+          {live && !staleBridge ? (
             <span className="text-emerald-400">· live</span>
-          ) : bridge?.reachable ? (
-            <span className="text-amber-400">· up, waiting tape</span>
+          ) : staleBridge ? (
+            <span className="text-rose-400">· stale</span>
           ) : (
             <span className="text-zinc-600">· offline</span>
           )}

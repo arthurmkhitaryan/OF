@@ -7,7 +7,7 @@ import type {
   TickPrint,
 } from "./market-types";
 
-const BIG_TRADE: Record<LiveInstrument, number> = { NQ: 75, ES: 200 };
+const BIG_TRADE: Record<LiveInstrument, number> = { NQ: 40, ES: 100 };
 
 /**
  * Classify tape prints → Big trade / Absorption / Trapped + delta bars.
@@ -39,7 +39,7 @@ export function analyzeOrderFlow(
 
   return {
     source,
-    prints: sorted.slice(-300),
+    prints: sorted.slice(-500),
     events: events.slice(0, 40),
     delta: delta.slice(-90),
     cumDelta,
@@ -201,17 +201,11 @@ export async function fetchBridgeTape(
       cumDelta?: number;
       source?: string;
     };
-    if (!data.prints?.length && !data.events?.length) return null;
-    if (data.prints?.length) {
-      return analyzeOrderFlow(instrument, data.prints, "bridge");
+    // Bridge connected → source bridge even before first ticks arrive
+    if (data.source === "bridge" || data.prints || data.events) {
+      return analyzeOrderFlow(instrument, data.prints ?? [], "bridge");
     }
-    return {
-      source: "bridge",
-      prints: [],
-      events: data.events ?? [],
-      delta: data.delta ?? [],
-      cumDelta: data.cumDelta ?? 0,
-    };
+    return null;
   } catch {
     return null;
   }
@@ -235,9 +229,7 @@ export async function resolveOrderFlow(
   bars: MarketBar[]
 ): Promise<OrderFlowSnapshot> {
   const bridge = await fetchBridgeTape(instrument);
-  if (bridge && (bridge.prints.length > 0 || bridge.events.length > 0)) {
-    return bridge;
-  }
+  if (bridge) return bridge;
   if (process.env.ALLOW_DEMO_OF === "1") {
     return synthesizeTapeFromBars(instrument, bars);
   }

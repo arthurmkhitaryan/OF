@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { fetchYahooBars } from "@/lib/market-bars";
+import { fetchMarketBars } from "@/lib/market-bars";
 import { computeVolumeProfile } from "@/lib/volume-profile";
 import { buildLiveSignal } from "@/lib/signal-engine";
 import { getGexForDate } from "@/lib/gex-queries";
@@ -17,7 +17,7 @@ export async function GET(request: Request) {
   const binSize = instrument === "NQ" ? 5 : 2.5;
 
   const [{ bars, source, symbol: feedSymbol, error }, gexDay] = await Promise.all([
-    fetchYahooBars(instrument),
+    fetchMarketBars(instrument),
     getGexForDate(),
   ]);
 
@@ -50,7 +50,7 @@ export async function GET(request: Request) {
     of,
     bridge: {
       configured: true,
-      connected: of.source === "bridge",
+      connected: of.source === "bridge" || source === "bridge",
       docs: "/docs/rithmic-setup.md",
     },
   });

@@ -65,7 +65,10 @@ export interface OrderFlowEvent {
 
 /** Aggressor print (tick / time & sales) */
 export interface TickPrint {
-  time: number; // unix seconds (can be fractional for demo)
+  /** unix seconds (fractional = ms/us precision) */
+  time: number;
+  /** unix epoch milliseconds from Rithmic source_ssboe+usecs */
+  timeMs?: number;
   price: number;
   size: number;
   side: "BUY" | "SELL";

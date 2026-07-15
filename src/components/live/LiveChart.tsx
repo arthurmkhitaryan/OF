@@ -46,6 +46,15 @@ interface Props {
   /** When false (user panned), do not auto-scroll right. */
   followLive: boolean;
   onFollowLiveChange?: (follow: boolean) => void;
+  /** Immediate last price from Rithmic WS (ms tape) */
+  livePrice?: number | null;
+  /** Notify parent of visible time range (unix sec) for VP "visible" mode */
+  onVisibleTimeRangeChange?: (range: { from: number; to: number } | null) => void;
+  /** When set, next click(s) on the chart pick custom VP range endpoints */
+  customPickActive?: boolean;
+  onCustomTimePicked?: (time: number) => void;
+  /** Highlight custom VP range on the time scale */
+  highlightRange?: { from: number; to: number } | null;
 }
 
 export function LiveChart({
@@ -60,6 +69,11 @@ export function LiveChart({
   layers,
   followLive,
   onFollowLiveChange,
+  livePrice = null,
+  onVisibleTimeRangeChange,
+  customPickActive = false,
+  onCustomTimePicked,
+  highlightRange = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -73,9 +87,15 @@ export function LiveChart({
   const lastBarsRef = useRef<MarketBar[]>([]);
   const programmaticRef = useRef(false);
   const onFollowRef = useRef(onFollowLiveChange);
+  const onVisibleRef = useRef(onVisibleTimeRangeChange);
+  const customPickRef = useRef(customPickActive);
+  const onCustomPickRef = useRef(onCustomTimePicked);
 
   followRef.current = followLive;
   onFollowRef.current = onFollowLiveChange;
+  onVisibleRef.current = onVisibleTimeRangeChange;
+  customPickRef.current = customPickActive;
+  onCustomPickRef.current = onCustomTimePicked;
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -93,9 +113,11 @@ export function LiveChart({
       timeScale: {
         borderColor: "#27272a",
         timeVisible: true,
-        rightOffset: 6,
+        secondsVisible: false,
+        rightOffset: 8,
         shiftVisibleRangeOnNewBar: false,
-        barSpacing: 8,
+        barSpacing: 10,
+        minBarSpacing: 4,
       },
       crosshair: { mode: 1 },
       width: containerRef.current.clientWidth,
@@ -108,6 +130,12 @@ export function LiveChart({
       borderVisible: false,
       wickUpColor: "#34d399",
       wickDownColor: "#f87171",
+      priceLineVisible: true,
+      lastValueVisible: true,
+    });
+    series.priceScale().applyOptions({
+      autoScale: true,
+      scaleMargins: { top: 0.08, bottom: 0.12 },
     });
 
     const overlay = new ChartSideOverlaysPrimitive(0.28, 0.28);
@@ -125,19 +153,49 @@ export function LiveChart({
       if (followRef.current) onFollowRef.current?.(false);
     };
 
-    // Immediate: any drag/wheel stops auto-follow (don't wait for range math)
     const el = containerRef.current;
-    el.addEventListener("pointerdown", unlockPan);
+    // Only intentional pan/zoom — not a mere click (that was freezing “follow”)
+    let downX = 0;
+    let downY = 0;
+    const onPointerDown = (e: PointerEvent) => {
+      downX = e.clientX;
+      downY = e.clientY;
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      if (e.buttons === 0) return;
+      const dx = Math.abs(e.clientX - downX);
+      const dy = Math.abs(e.clientY - downY);
+      if (dx > 6 || dy > 6) unlockPan();
+    };
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
     el.addEventListener("wheel", unlockPan, { passive: true });
 
     const onRange = (range: LogicalRange | null) => {
-      if (programmaticRef.current || !range) return;
+      if (!range) return;
       const dataLen = lastBarsRef.current.length;
       if (!dataLen) return;
+
+      const fromIdx = Math.max(0, Math.floor(range.from as number));
+      const toIdx = Math.min(dataLen - 1, Math.ceil(range.to as number));
+      const fromBar = lastBarsRef.current[fromIdx];
+      const toBar = lastBarsRef.current[toIdx];
+      if (fromBar && toBar) {
+        onVisibleRef.current?.({ from: fromBar.time, to: toBar.time });
+      }
+
+      if (programmaticRef.current) return;
       const atRight = (range.to as number) >= dataLen - 1.5;
       if (!atRight && followRef.current) onFollowRef.current?.(false);
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
+
+    const onClick = (param: { time?: unknown }) => {
+      if (!customPickRef.current || param.time == null) return;
+      const t = typeof param.time === "number" ? param.time : null;
+      if (t != null) onCustomPickRef.current?.(t);
+    };
+    chart.subscribeClick(onClick);
 
     const ro = new ResizeObserver(() => {
       if (containerRef.current) {
@@ -147,9 +205,11 @@ export function LiveChart({
     ro.observe(containerRef.current);
 
     return () => {
-      el.removeEventListener("pointerdown", unlockPan);
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
       el.removeEventListener("wheel", unlockPan);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange);
+      chart.unsubscribeClick(onClick);
       ro.disconnect();
       chart.remove();
       chartRef.current = null;
@@ -191,29 +251,38 @@ export function LiveChart({
       prev[prev.length - 1].time === bars[bars.length - 2].time;
 
     if (onlyLastTick || appendedOne) {
-      const last = bars[bars.length - 1];
-      series.update({
-        time: last.time as Time,
-        open: last.open,
-        high: last.high,
-        low: last.low,
-        close: last.close,
-      });
+      const last = bars[bars.length - 1]!;
+      try {
+        series.update({
+          time: last.time as Time,
+          open: last.open,
+          high: last.high,
+          low: last.low,
+          close: last.close,
+        });
+      } catch {
+        series.setData(data);
+      }
     } else {
       series.setData(data);
     }
 
-    lastBarsRef.current = bars;
+    lastBarsRef.current = bars.map((b) => ({ ...b }));
 
     // First paint only — then leave the user alone unless followLive
     if (!fittedRef.current) {
       programmaticRef.current = true;
-      const from = Math.max(0, bars.length - 120);
+      const from = Math.max(0, bars.length - 90);
       chart.timeScale().setVisibleLogicalRange({
         from,
-        to: bars.length + 4,
+        to: bars.length + 6,
       } as LogicalRange);
       fittedRef.current = true;
+      const fromBar = bars[from];
+      const toBar = bars[bars.length - 1];
+      if (fromBar && toBar) {
+        onVisibleRef.current?.({ from: fromBar.time, to: toBar.time });
+      }
       requestAnimationFrame(() => {
         programmaticRef.current = false;
       });
@@ -229,6 +298,70 @@ export function LiveChart({
     }
     // if !followLive → do not touch timeScale at all
   }, [bars, followLive]);
+
+  // Fast path: WS mid/trade price → last candle (no full re-setData)
+  useEffect(() => {
+    const series = seriesRef.current;
+    const chart = chartRef.current;
+    if (!series || !chart || livePrice == null || !Number.isFinite(livePrice)) {
+      return;
+    }
+    const prev = lastBarsRef.current;
+    if (!prev.length) return;
+    const last = prev[prev.length - 1]!;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const minute = nowSec - (nowSec % 60);
+
+    if (minute > last.time) {
+      const next = {
+        time: minute,
+        open: last.close,
+        high: Math.max(last.close, livePrice),
+        low: Math.min(last.close, livePrice),
+        close: livePrice,
+        volume: 0,
+      };
+      try {
+        series.update({
+          time: next.time as Time,
+          open: next.open,
+          high: next.high,
+          low: next.low,
+          close: next.close,
+        });
+        lastBarsRef.current = [...prev, next];
+      } catch {
+        /* ignore */
+      }
+    } else {
+      const updated = {
+        ...last,
+        high: Math.max(last.high, livePrice),
+        low: Math.min(last.low, livePrice),
+        close: livePrice,
+      };
+      try {
+        series.update({
+          time: updated.time as Time,
+          open: updated.open,
+          high: updated.high,
+          low: updated.low,
+          close: updated.close,
+        });
+        lastBarsRef.current = [...prev.slice(0, -1), updated];
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (followLive) {
+      programmaticRef.current = true;
+      chart.timeScale().scrollToRealTime();
+      requestAnimationFrame(() => {
+        programmaticRef.current = false;
+      });
+    }
+  }, [livePrice, followLive]);
 
   useEffect(() => {
     const series = seriesRef.current;
@@ -288,40 +421,75 @@ export function LiveChart({
       showDelta: layers.delta,
     });
 
-    if (!layers.ofMarkers) {
-      markersRef.current?.setMarkers([]);
-      return;
-    }
+    const ofMarks = layers.ofMarkers
+      ? pickChartMarkers(orderflow, {
+          max: 14,
+          lookbackSec: 6 * 60 * 60,
+          types: layers.ofBigOnly
+            ? ["BIG_TRADE"]
+            : ["BIG_TRADE", "ABSORPTION", "TRAPPED"],
+        }).map((e) => ({
+          time: (Math.floor(e.time / 60) * 60) as Time,
+          position: (e.side === "BUY" ? "belowBar" : "aboveBar") as
+            | "belowBar"
+            | "aboveBar",
+          color:
+            e.type === "BIG_TRADE"
+              ? "#fb923c"
+              : e.type === "ABSORPTION"
+                ? "#e879f9"
+                : "#facc15",
+          shape: (e.side === "BUY" ? "arrowUp" : "arrowDown") as
+            | "arrowUp"
+            | "arrowDown",
+          text:
+            e.type === "BIG_TRADE"
+              ? String(e.size ?? "")
+              : e.type === "ABSORPTION"
+                ? "ABS"
+                : "TRP",
+        }))
+      : [];
 
-    const picked = pickChartMarkers(orderflow, {
-      max: 6,
-      lookbackSec: 50 * 60,
-      types: layers.ofBigOnly ? ["BIG_TRADE"] : ["BIG_TRADE", "ABSORPTION", "TRAPPED"],
-    });
+    const rangeMarks =
+      highlightRange && highlightRange.to > highlightRange.from
+        ? [
+            {
+              time: (Math.floor(highlightRange.from / 60) * 60) as Time,
+              position: "aboveBar" as const,
+              color: "#38bdf8",
+              shape: "circle" as const,
+              text: "VP>",
+            },
+            {
+              time: (Math.floor(highlightRange.to / 60) * 60) as Time,
+              position: "aboveBar" as const,
+              color: "#38bdf8",
+              shape: "circle" as const,
+              text: "<VP",
+            },
+          ]
+        : [];
 
-    markersRef.current?.setMarkers(
-      picked.map((e) => ({
-        time: (Math.floor(e.time / 60) * 60) as Time,
-        position: (e.side === "BUY" ? "belowBar" : "aboveBar") as "belowBar" | "aboveBar",
-        color:
-          e.type === "BIG_TRADE"
-            ? "#fb923c"
-            : e.type === "ABSORPTION"
-              ? "#e879f9"
-              : "#facc15",
-        shape: (e.side === "BUY" ? "arrowUp" : "arrowDown") as "arrowUp" | "arrowDown",
-        text:
-          e.type === "BIG_TRADE"
-            ? String(e.size ?? "")
-            : e.type === "ABSORPTION"
-              ? "ABS"
-              : "TRP",
-      }))
-    );
-  }, [profile, prints, gex, orderflow, entryZone, stopPrice, takePrice, layers]);
+    markersRef.current?.setMarkers([...ofMarks, ...rangeMarks]);
+  }, [
+    profile,
+    prints,
+    gex,
+    orderflow,
+    entryZone,
+    stopPrice,
+    takePrice,
+    layers,
+    highlightRange,
+  ]);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
+    <div
+      className={`overflow-hidden rounded-xl border bg-zinc-950 ${
+        customPickActive ? "border-sky-500 ring-1 ring-sky-500/40" : "border-zinc-800"
+      }`}
+    >
       <div ref={containerRef} className="w-full" />
     </div>
   );

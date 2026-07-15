@@ -10,8 +10,8 @@
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "bridge:stub": "node tools/rithmic-bridge/server.mjs",
-    "bridge": "python tools/rithmic-bridge/server.py",
-    "bridge:py": "python tools/rithmic-bridge/server.py"
+    "bridge": "node tools/rithmic-bridge/run.mjs",
+    "bridge:py": "node tools/rithmic-bridge/run.mjs"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

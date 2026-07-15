@@ -24,17 +24,24 @@ interface Props {
   bigOnly?: boolean;
   followLive?: boolean;
   onFollowLiveChange?: (follow: boolean) => void;
+  /** Forced last trade price (updates point even within same second) */
+  livePrice?: number | null;
 }
 
+/**
+ * Price path tick-by-tick. LWC needs unique unix-second keys, so same-second
+ * trades update the last point's value (price visibly jumps on each print).
+ */
 export function TickChart({
   prints,
   events,
   entryZone,
   stopPrice,
   takePrice,
-  bigOnly = true,
+  bigOnly = false,
   followLive = true,
   onFollowLiveChange,
+  livePrice = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -45,7 +52,8 @@ export function TickChart({
   const followRef = useRef(followLive);
   const programmaticRef = useRef(false);
   const onFollowRef = useRef(onFollowLiveChange);
-  const wrapRef = useRef<HTMLDivElement>(null);
+  const lastSecRef = useRef<number | null>(null);
+  const lastValRef = useRef<number | null>(null);
 
   followRef.current = followLive;
   onFollowRef.current = onFollowLiveChange;
@@ -61,33 +69,55 @@ export function TickChart({
         vertLines: { color: "#18181b" },
         horzLines: { color: "#18181b" },
       },
-      rightPriceScale: { borderColor: "#27272a" },
+      rightPriceScale: {
+        borderColor: "#27272a",
+        autoScale: true,
+        scaleMargins: { top: 0.1, bottom: 0.12 },
+      },
       timeScale: {
         borderColor: "#27272a",
         timeVisible: true,
         secondsVisible: true,
-        rightOffset: 4,
-        shiftVisibleRangeOnNewBar: false,
+        rightOffset: 8,
+        shiftVisibleRangeOnNewBar: true,
+        barSpacing: 3,
       },
       width: containerRef.current.clientWidth,
-      height: 420,
+      height: 480,
     });
     const series = chart.addSeries(LineSeries, {
       color: "#38bdf8",
-      lineWidth: 1,
+      lineWidth: 2,
       crosshairMarkerVisible: true,
+      lastValueVisible: true,
+      priceLineVisible: true,
     });
     chartRef.current = chart;
     seriesRef.current = series;
     markersRef.current = createSeriesMarkers(series, []);
     fittedRef.current = false;
+    lastSecRef.current = null;
+    lastValRef.current = null;
 
+    let downX = 0;
+    let downY = 0;
     const unlockPan = () => {
       if (programmaticRef.current) return;
       if (followRef.current) onFollowRef.current?.(false);
     };
     const el = containerRef.current;
-    el.addEventListener("pointerdown", unlockPan);
+    const onPointerDown = (e: PointerEvent) => {
+      downX = e.clientX;
+      downY = e.clientY;
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      if (e.buttons === 0) return;
+      if (Math.abs(e.clientX - downX) > 6 || Math.abs(e.clientY - downY) > 6) {
+        unlockPan();
+      }
+    };
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
     el.addEventListener("wheel", unlockPan, { passive: true });
 
     const ro = new ResizeObserver(() => {
@@ -98,7 +128,8 @@ export function TickChart({
     ro.observe(containerRef.current);
 
     return () => {
-      el.removeEventListener("pointerdown", unlockPan);
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
       el.removeEventListener("wheel", unlockPan);
       ro.disconnect();
       chart.remove();
@@ -108,10 +139,11 @@ export function TickChart({
     };
   }, []);
 
+  // Full rebuild when print history changes a lot
   useEffect(() => {
     const series = seriesRef.current;
     const chart = chartRef.current;
-    if (!series || !chart) return;
+    if (!series || !chart || !prints.length) return;
 
     const bySec = new Map<number, number>();
     for (const p of prints) {
@@ -122,11 +154,18 @@ export function TickChart({
       .sort((a, b) => a[0] - b[0])
       .map(([time, value]) => ({ time: time as Time, value }));
 
+    if (!data.length) return;
     series.setData(data);
+    lastSecRef.current = data[data.length - 1]!.time as number;
+    lastValRef.current = data[data.length - 1]!.value;
 
-    if (!fittedRef.current && data.length) {
+    if (!fittedRef.current) {
       programmaticRef.current = true;
-      chart.timeScale().fitContent();
+      const from = Math.max(0, data.length - 180);
+      chart.timeScale().setVisibleLogicalRange({
+        from,
+        to: data.length + 4,
+      });
       fittedRef.current = true;
       requestAnimationFrame(() => {
         programmaticRef.current = false;
@@ -159,12 +198,14 @@ export function TickChart({
     if (takePrice != null) add(takePrice, "#22c55e", "Take");
 
     const markers = pickChartMarkers(events, {
-      max: 6,
-      lookbackSec: 50 * 60,
+      max: 10,
+      lookbackSec: 2 * 60 * 60,
       types: bigOnly ? ["BIG_TRADE"] : ["BIG_TRADE", "ABSORPTION", "TRAPPED"],
     }).map((e) => ({
       time: Math.floor(e.time) as Time,
-      position: (e.side === "BUY" ? "belowBar" : "aboveBar") as "belowBar" | "aboveBar",
+      position: (e.side === "BUY" ? "belowBar" : "aboveBar") as
+        | "belowBar"
+        | "aboveBar",
       color:
         e.type === "BIG_TRADE"
           ? "#fb923c"
@@ -182,11 +223,71 @@ export function TickChart({
     markersRef.current?.setMarkers(markers);
   }, [prints, events, entryZone, stopPrice, takePrice, bigOnly, followLive]);
 
+  // Every live trade / BBO: move last price point immediately
+  useEffect(() => {
+    const series = seriesRef.current;
+    const chart = chartRef.current;
+    if (
+      !series ||
+      !chart ||
+      livePrice == null ||
+      !Number.isFinite(livePrice)
+    ) {
+      return;
+    }
+    if (lastValRef.current === livePrice) return;
+
+    const sec = Math.floor(Date.now() / 1000);
+    try {
+      if (lastSecRef.current != null && sec === lastSecRef.current) {
+        series.update({ time: sec as Time, value: livePrice });
+      } else if (lastSecRef.current != null && sec > lastSecRef.current) {
+        series.update({ time: sec as Time, value: livePrice });
+        lastSecRef.current = sec;
+      } else if (lastSecRef.current == null) {
+        series.update({ time: sec as Time, value: livePrice });
+        lastSecRef.current = sec;
+      } else {
+        // clock skew vs print time — still bump value on last sec
+        series.update({
+          time: lastSecRef.current as Time,
+          value: livePrice,
+        });
+      }
+      lastValRef.current = livePrice;
+    } catch {
+      try {
+        series.update({ time: sec as Time, value: livePrice });
+        lastSecRef.current = sec;
+        lastValRef.current = livePrice;
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (followLive) {
+      programmaticRef.current = true;
+      chart.timeScale().scrollToRealTime();
+      requestAnimationFrame(() => {
+        programmaticRef.current = false;
+      });
+    }
+  }, [livePrice, followLive]);
+
+  const last = prints[prints.length - 1];
+
   return (
-    <div ref={wrapRef} className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
+    <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
       <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-1.5 text-[10px] text-zinc-500">
-        <span>Tick chart · Time & Sales path</span>
-        <span>{prints.length} prints</span>
+        <span>Tick chart · price moves on every print</span>
+        <span className="font-mono text-zinc-300">
+          {livePrice != null
+            ? livePrice.toFixed(2)
+            : last
+              ? last.price.toFixed(2)
+              : "—"}{" "}
+          · {prints.length} ticks
+        </span>
       </div>
       <div ref={containerRef} className="w-full" />
     </div>
